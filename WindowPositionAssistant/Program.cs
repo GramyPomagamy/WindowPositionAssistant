@@ -1,33 +1,75 @@
 using System.Runtime.InteropServices;
 using System.Diagnostics;
+using Application = System.Windows.Forms.Application;
 
 namespace WindowPositionAssistant
 {
     class Program
     {
-        static void Main(string[] argv)
+        static void Main()
         {
-            var builder = WebApplication.CreateBuilder(argv);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new WindowPositionAssistantContext());
+        }
 
-            builder.Services.AddEndpointsApiExplorer();
-            builder.Services.AddSwaggerGen();
+        public class WindowPositionAssistantContext : ApplicationContext
+        {
+            private NotifyIcon NotifyIcon;
+            private WebApplication WebApplication;
 
-            var app = builder.Build();
-
-            if (app.Environment.IsDevelopment())
+            public WindowPositionAssistantContext()
             {
-                app.UseSwagger();
-                app.UseSwaggerUI();
+                NotifyIcon = SetupNotifyIcon();
+                WebApplication = SetupApplication();
+
+                WebApplication.StartAsync();
             }
 
-            app.MapGet("/windows", () =>
+            private WebApplication SetupApplication()
             {
-                var windows = GetWindows();
-                return windows;
-            })
-            .WithName("GetWindows");
+                var builder = WebApplication.CreateBuilder();
+                builder.Services.AddEndpointsApiExplorer();
+                builder.Services.AddSwaggerGen();
 
-            app.Run();
+                var app = builder.Build();
+
+                if (app.Environment.IsDevelopment())
+                {
+                    app.UseSwagger();
+                    app.UseSwaggerUI();
+                }
+
+                app.MapGet("/windows", () =>
+                {
+                    var windows = GetWindows();
+                    return windows;
+                })
+                .WithName("GetWindows");
+
+                return app;
+            }
+
+            private NotifyIcon SetupNotifyIcon()
+            {
+                var notifyIcon = new NotifyIcon()
+                {
+                    Icon = new Icon("icon.ico"),
+                    ContextMenuStrip = new ContextMenuStrip(),
+                    Visible = true
+                };
+
+                notifyIcon.ContextMenuStrip.Items.Add(new ToolStripMenuItem("Exit", null, new EventHandler(Exit)));
+
+                return notifyIcon;
+            }
+
+            private void Exit(object sender, EventArgs e)
+            {
+                WebApplication.StopAsync();
+                NotifyIcon.Dispose();
+                Application.Exit();
+            }
         }
 
         [DllImport("user32.dll")]
@@ -111,11 +153,6 @@ namespace WindowPositionAssistant
             PID = pid;
             ProcessName = processName;
             WindowTitle = windowTitle;
-        }
-
-        override public string ToString()
-        {
-            return $"{X}, {Y}; {W} x {H}";
         }
     }
 
