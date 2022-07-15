@@ -119,8 +119,6 @@ namespace WindowPositionAssistant
             results.Sort(comparison: (a, b) => a.ProcessName.CompareTo(b.ProcessName));
             return results;
         }
-
-
     }
 
     public struct Point
