@@ -145,9 +145,9 @@ namespace WindowPositionAssistant
             static List<WindowInfo> GetWindows()
             {
                 List<WindowInfo> results = new();
-                Process[] processlist = Process.GetProcesses();
+                Process[] processes = Process.GetProcesses();
 
-                foreach (Process process in processlist)
+                foreach (Process process in processes)
                 {
                     WindowInfo windowInfo = new(process.Id, process.ProcessName, process.MainWindowTitle);
 
@@ -156,6 +156,8 @@ namespace WindowPositionAssistant
 
                     GetClientRect(process.MainWindowHandle, ref clientAreaRect);
                     ClientToScreen(process.MainWindowHandle, ref clientAreaAnchor);
+
+                    process.Dispose();  // important to free underlying resources
 
                     windowInfo.X = clientAreaAnchor.X;
                     windowInfo.Y = clientAreaAnchor.Y;
@@ -169,6 +171,10 @@ namespace WindowPositionAssistant
                 }
 
                 results.Sort(comparison: (a, b) => a.ProcessName.CompareTo(b.ProcessName));
+
+                Array.Clear(processes);
+                GC.Collect();
+
                 return results;
             }
         }
