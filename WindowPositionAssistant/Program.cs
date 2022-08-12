@@ -1,6 +1,8 @@
 using System.Runtime.InteropServices;
 using System.Diagnostics;
 using Application = System.Windows.Forms.Application;
+using System.Net.Http;
+using System.Text.Json;
 
 namespace WindowPositionAssistant
 {
@@ -15,18 +17,24 @@ namespace WindowPositionAssistant
 
         public class WindowPositionAssistantContext : ApplicationContext
         {
-            private NotifyIcon NotifyIcon;
-            private WebApplication WebApplication;
+            private readonly NotifyIcon NotifyIcon;
+            private readonly WebApplication WebApplication;
+            private readonly ToolStripMenuItem SubmitterMenuItem;
+            private readonly IConfiguration Configuration;
+            private System.Threading.Timer? SubmitterTimer;
 
             public WindowPositionAssistantContext()
             {
+                Configuration = new ConfigurationBuilder().AddJsonFile("appsettings.json").Build();
+
+                SubmitterMenuItem = new ToolStripMenuItem("Submit online", null, new EventHandler(HandleSubmitter));
                 NotifyIcon = SetupNotifyIcon();
                 WebApplication = SetupApplication();
 
                 WebApplication.StartAsync();
             }
 
-            private WebApplication SetupApplication()
+            private static WebApplication SetupApplication()
             {
                 var builder = WebApplication.CreateBuilder();
                 builder.Services.AddEndpointsApiExplorer();
@@ -59,65 +67,116 @@ namespace WindowPositionAssistant
                     Visible = true
                 };
 
-                notifyIcon.ContextMenuStrip.Items.Add(new ToolStripMenuItem("Exit", null, new EventHandler(Exit)));
+                notifyIcon.ContextMenuStrip.Items.Add(SubmitterMenuItem);
+                notifyIcon.ContextMenuStrip.Items.Add(new ToolStripMenuItem("Exit", null, new EventHandler(HandleExit)));
 
                 return notifyIcon;
             }
 
-            private void Exit(object sender, EventArgs e)
+            private void HandleExit(object? sender, EventArgs e)
             {
                 WebApplication.StopAsync();
                 NotifyIcon.Dispose();
                 Application.Exit();
             }
-        }
 
-        [DllImport("user32.dll")]
-        static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
-        [DllImport("user32.dll")]
-        static extern bool GetWindowRect(IntPtr hwnd, ref Rect rectangle);
-        [DllImport("user32.dll")]
-        static extern bool GetClientRect(IntPtr hwnd, ref Rect rectangle);
-        [DllImport("dwmapi.dll")]
-        static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out Rect pvAttribute, int cbAttribute);
-
-        static List<WindowInfo> GetWindows()
-        {
-            List<WindowInfo> results = new();
-
-            Process[] processlist = Process.GetProcesses();
-            foreach (Process process in processlist)
+            private void HandleSubmitter(object? sender, EventArgs e)
             {
-                WindowInfo windowInfo = new WindowInfo(process.Id, process.ProcessName, process.MainWindowTitle);
-
-                Rect clientRect = new Rect();
-                Rect windowRect = new Rect();
-                Rect rect;
-                Point point = new Point();
-
-                GetWindowRect(process.MainWindowHandle, ref windowRect);
-                GetClientRect(process.MainWindowHandle, ref clientRect);
-                ClientToScreen(process.MainWindowHandle, ref point);
-
-                int size = Marshal.SizeOf(typeof(Rect));
-                DwmGetWindowAttribute(process.MainWindowHandle, (int)DwmWindowAttribute.DWMWA_EXTENDED_FRAME_BOUNDS, out rect, size);
-
-                int borderWidth = (windowRect.Right - windowRect.Left - (clientRect.Right - clientRect.Left)) / 2;
-                
-                windowInfo.X = point.X;
-                windowInfo.Y = point.Y;
-                windowInfo.W = clientRect.Right - clientRect.Left;
-                windowInfo.H = clientRect.Bottom - clientRect.Top;
-
-                if (windowInfo.W > 0 && windowInfo.H > 0)
+                SubmitterMenuItem.Checked = !SubmitterMenuItem.Checked;
+                if (SubmitterMenuItem.CheckState == CheckState.Checked)
                 {
-                    results.Add(windowInfo);
+                    StartSubmitting();
                 }
-
+                else
+                {
+                    StopSubmitting();
+                }
             }
 
-            results.Sort(comparison: (a, b) => a.ProcessName.CompareTo(b.ProcessName));
-            return results;
+            private void StartSubmitting()
+            {
+                int id = Random.Shared.Next(100, 1000);  // [100-999]
+                SubmitterMenuItem.Text = "Online ID: " + id.ToString();
+                SubmitterTimer = new System.Threading.Timer(SubmitWindows, id, 0, int.Parse(Configuration.GetSection("ProxySettings")["PeriodMs"]));
+            }
+
+            private void StopSubmitting()
+            {
+                if (SubmitterTimer != null)
+                {
+                    SubmitterMenuItem.Text = "Submit online";
+                    SubmitterTimer.Dispose();
+                }
+            }
+
+            private async void SubmitWindows(Object? stateInfo)
+            {
+                if (stateInfo == null)
+                {
+                    return;
+                }
+
+                var windows = GetWindows();
+                int id = (int)stateInfo;
+                var client = new HttpClient();
+
+                try
+                {
+                    var serializerOptions = new JsonSerializerOptions
+                    {
+                        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    };
+
+                    await client.PostAsync(
+                        $"{Configuration.GetSection("ProxySettings")["Url"]}/{id}",
+                        new StringContent(JsonSerializer.Serialize(windows, serializerOptions))
+                    );
+                }
+                catch (HttpRequestException) { }
+                catch (System.Net.Sockets.SocketException) { }
+                catch (System.IO.IOException) { }
+            }
+
+            [DllImport("user32.dll")]
+            static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
+            [DllImport("user32.dll")]
+            static extern bool GetClientRect(IntPtr hwnd, ref Rect rectangle);
+
+            static List<WindowInfo> GetWindows()
+            {
+                List<WindowInfo> results = new();
+                Process[] processes = Process.GetProcesses();
+
+                foreach (Process process in processes)
+                {
+                    WindowInfo windowInfo = new(process.Id, process.ProcessName, process.MainWindowTitle);
+
+                    Rect clientAreaRect = new();
+                    Point clientAreaAnchor = new();
+
+                    GetClientRect(process.MainWindowHandle, ref clientAreaRect);
+                    ClientToScreen(process.MainWindowHandle, ref clientAreaAnchor);
+
+                    process.Dispose();  // important to free underlying resources
+
+                    windowInfo.X = clientAreaAnchor.X;
+                    windowInfo.Y = clientAreaAnchor.Y;
+                    windowInfo.W = clientAreaRect.Right - clientAreaRect.Left;
+                    windowInfo.H = clientAreaRect.Bottom - clientAreaRect.Top;
+
+                    if (windowInfo.W > 0 && windowInfo.H > 0)
+                    {
+                        results.Add(windowInfo);
+                    }
+                }
+
+                results.Sort(comparison: (a, b) => a.ProcessName.CompareTo(b.ProcessName));
+
+                Array.Clear(processes);
+                GC.Collect();
+
+                return results;
+            }
         }
     }
 
@@ -152,26 +211,5 @@ namespace WindowPositionAssistant
             ProcessName = processName;
             WindowTitle = windowTitle;
         }
-    }
-
-    [Flags]
-    enum DwmWindowAttribute : uint
-    {
-        DWMWA_NCRENDERING_ENABLED = 1,
-        DWMWA_NCRENDERING_POLICY,
-        DWMWA_TRANSITIONS_FORCEDISABLED,
-        DWMWA_ALLOW_NCPAINT,
-        DWMWA_CAPTION_BUTTON_BOUNDS,
-        DWMWA_NONCLIENT_RTL_LAYOUT,
-        DWMWA_FORCE_ICONIC_REPRESENTATION,
-        DWMWA_FLIP3D_POLICY,
-        DWMWA_EXTENDED_FRAME_BOUNDS,
-        DWMWA_HAS_ICONIC_BITMAP,
-        DWMWA_DISALLOW_PEEK,
-        DWMWA_EXCLUDED_FROM_PEEK,
-        DWMWA_CLOAK,
-        DWMWA_CLOAKED,
-        DWMWA_FREEZE_REPRESENTATION,
-        DWMWA_LAST
     }
 }
