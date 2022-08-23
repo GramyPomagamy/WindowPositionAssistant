@@ -3,6 +3,8 @@ using System.Diagnostics;
 using Application = System.Windows.Forms.Application;
 using System.Net.Http;
 using System.Text.Json;
+using System.Reflection;
+using System.IO;
 
 namespace WindowPositionAssistant
 {
@@ -60,9 +62,12 @@ namespace WindowPositionAssistant
 
             private NotifyIcon SetupNotifyIcon()
             {
+                FileInfo executableInfo = new FileInfo(Assembly.GetExecutingAssembly().Location);
+                string iconPath = Path.Combine(executableInfo.Directory.FullName, "icon.ico");
+
                 var notifyIcon = new NotifyIcon()
                 {
-                    Icon = new Icon("icon.ico"),
+                    Icon = new Icon(iconPath),
                     ContextMenuStrip = new ContextMenuStrip(),
                     Visible = true
                 };
